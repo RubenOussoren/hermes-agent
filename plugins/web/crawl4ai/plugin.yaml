@@ -1,0 +1,7 @@
+name: web-crawl4ai
+version: 1.0.0
+description: "Crawl4AI page extraction — free, open-source, self-hosted Markdown extraction for use with SearXNG or other search-only providers. Requires CRAWL4AI_URL pointing at your instance."
+author: NousResearch
+kind: backend
+provides_web_providers:
+  - crawl4ai
