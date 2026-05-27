@@ -2540,10 +2540,11 @@ def _plugin_web_search_providers() -> list[dict]:
     """Build picker-row dicts from plugin-registered web search providers.
 
     Each returned dict is a regular ``TOOL_CATEGORIES`` provider row. It
-    populates both ``web_backend`` (legacy field consumed by setup +
-    selection helpers) and ``web_search_plugin_name`` (informational
-    marker) so the picker behaves identically whether a provider is
-    hardcoded or plugin-registered.
+    populates per-capability backend keys for search-only / extract-only
+    providers and the legacy shared ``web_backend`` key for providers that
+    support both search and extract. ``web_search_plugin_name`` remains an
+    informational marker so the picker behaves identically whether a provider
+    is hardcoded or plugin-registered.
 
     After PR #25182, all seven web providers (brave-free, ddgs, searxng,
     exa, parallel, tavily, firecrawl) are plugins; this helper is the sole
@@ -2574,9 +2575,19 @@ def _plugin_web_search_providers() -> list[dict]:
             "badge": schema.get("badge", ""),
             "tag": schema.get("tag", ""),
             "env_vars": schema.get("env_vars", []),
-            "web_backend": name,
             "web_search_plugin_name": name,
         }
+        supports_search = bool(provider.supports_search())
+        supports_extract = bool(provider.supports_extract())
+        if supports_search and supports_extract:
+            # Multi-capability providers keep using the legacy shared key
+            # unless the user explicitly overrides per-capability config.
+            row["web_backend"] = name
+        else:
+            if supports_search:
+                row["web_search_backend"] = name
+            if supports_extract:
+                row["web_extract_backend"] = name
         # Optional pass-through fields the schema can opt into.
         if schema.get("post_setup"):
             row["post_setup"] = schema["post_setup"]
@@ -3226,6 +3237,12 @@ def _is_provider_active(
         if provider.get("web_backend"):
             current = cfg_get(config, "web", "backend")
             return feature.managed_by_nous and current == provider["web_backend"]
+        if provider.get("web_search_backend"):
+            current = cfg_get(config, "web", "search_backend")
+            return feature.managed_by_nous and current == provider["web_search_backend"]
+        if provider.get("web_extract_backend"):
+            current = cfg_get(config, "web", "extract_backend")
+            return feature.managed_by_nous and current == provider["web_extract_backend"]
         return feature.managed_by_nous
 
     if provider.get("tts_provider"):
@@ -3236,6 +3253,12 @@ def _is_provider_active(
     if provider.get("web_backend"):
         current = cfg_get(config, "web", "backend")
         return current == provider["web_backend"]
+    if provider.get("web_search_backend"):
+        current = cfg_get(config, "web", "search_backend")
+        return current == provider["web_search_backend"]
+    if provider.get("web_extract_backend"):
+        current = cfg_get(config, "web", "extract_backend")
+        return current == provider["web_extract_backend"]
     if provider.get("imagegen_backend"):
         image_cfg = config.get("image_gen", {})
         if not isinstance(image_cfg, dict):
@@ -3631,10 +3654,18 @@ def _write_provider_config(provider: dict, config: dict, *, managed_feature) -> 
             browser_cfg["cloud_provider"] = bp
         browser_cfg["use_gateway"] = bool(managed_feature)
 
-    # Set web search backend in config if applicable
+    # Set web search/extract backend in config if applicable
     if provider.get("web_backend"):
         web_cfg = config.setdefault("web", {})
         web_cfg["backend"] = provider["web_backend"]
+        web_cfg["use_gateway"] = bool(managed_feature)
+    if provider.get("web_search_backend"):
+        web_cfg = config.setdefault("web", {})
+        web_cfg["search_backend"] = provider["web_search_backend"]
+        web_cfg["use_gateway"] = bool(managed_feature)
+    if provider.get("web_extract_backend"):
+        web_cfg = config.setdefault("web", {})
+        web_cfg["extract_backend"] = provider["web_extract_backend"]
         web_cfg["use_gateway"] = bool(managed_feature)
 
     # For tools without a specific config key (e.g. image_gen), still
@@ -4271,12 +4302,22 @@ def _reconfigure_provider(
             _print_success(f"  Browser cloud provider set to: {bp}")
         browser_cfg["use_gateway"] = bool(managed_feature)
 
-    # Set web search backend in config if applicable
+    # Set web search/extract backend in config if applicable
     if provider.get("web_backend"):
         web_cfg = config.setdefault("web", {})
         web_cfg["backend"] = provider["web_backend"]
         web_cfg["use_gateway"] = bool(managed_feature)
         _print_success(f"  Web backend set to: {provider['web_backend']}")
+    if provider.get("web_search_backend"):
+        web_cfg = config.setdefault("web", {})
+        web_cfg["search_backend"] = provider["web_search_backend"]
+        web_cfg["use_gateway"] = bool(managed_feature)
+        _print_success(f"  Web search backend set to: {provider['web_search_backend']}")
+    if provider.get("web_extract_backend"):
+        web_cfg = config.setdefault("web", {})
+        web_cfg["extract_backend"] = provider["web_extract_backend"]
+        web_cfg["use_gateway"] = bool(managed_feature)
+        _print_success(f"  Web extract backend set to: {provider['web_extract_backend']}")
 
     if managed_feature and managed_feature not in {"web", "tts", "browser"}:
         section = config.setdefault(managed_feature, {})

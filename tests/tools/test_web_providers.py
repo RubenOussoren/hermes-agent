@@ -177,7 +177,7 @@ class TestPerCapabilityBackendSelection:
         monkeypatch.setenv("PARALLEL_API_KEY", "test-key")
         assert web_tools._get_extract_backend() == "parallel"
 
-    def test_search_backend_ignored_when_not_available(self, monkeypatch):
+    def test_explicit_search_backend_honored_when_unavailable(self, monkeypatch):
         from tools import web_tools
 
         monkeypatch.setattr(web_tools, "_load_web_config", lambda: {
@@ -186,8 +186,38 @@ class TestPerCapabilityBackendSelection:
         })
         monkeypatch.delenv("EXA_API_KEY", raising=False)
         monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-key")
-        # Should fall back to firecrawl since exa isn't configured
-        assert web_tools._get_search_backend() == "firecrawl"
+        # The explicit per-capability choice (exa) is honored even though it's
+        # unavailable, so its setup error surfaces — we don't silently reroute
+        # to the shared backend.
+        assert web_tools._get_search_backend() == "exa"
+
+    def test_extract_backend_accepts_registered_extract_only_plugin(self, monkeypatch):
+        from agent.web_search_provider import WebSearchProvider
+        from agent.web_search_registry import _reset_for_tests, register_provider
+        from tools import web_tools
+
+        class ExtractOnly(WebSearchProvider):
+            @property
+            def name(self) -> str:
+                return "extract-only"
+
+            def is_available(self) -> bool:
+                return False
+
+            def supports_search(self) -> bool:
+                return False
+
+            def supports_extract(self) -> bool:
+                return True
+
+        _reset_for_tests()
+        register_provider(ExtractOnly())
+        monkeypatch.setattr(web_tools, "_load_web_config", lambda: {
+            "extract_backend": "extract-only",
+        })
+        assert web_tools._get_extract_backend() == "extract-only"
+        assert web_tools._is_backend_available("extract-only") is False
+        _reset_for_tests()
 
     def test_fully_backward_compatible_with_web_backend_only(self, monkeypatch):
         from tools import web_tools

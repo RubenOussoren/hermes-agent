@@ -1570,6 +1570,28 @@ def test_reconfigure_browser_provider_overwrites_stale_use_gateway():
     assert config["browser"]["use_gateway"] is False
 
 
+def test_configure_provider_writes_search_backend_for_search_only_web_provider():
+    config = {}
+    provider = {"name": "Search Only", "web_search_backend": "searxng", "env_vars": []}
+
+    _configure_provider(provider, config)
+
+    assert config["web"]["search_backend"] == "searxng"
+    assert "backend" not in config["web"]
+    assert config["web"]["use_gateway"] is False
+
+
+def test_configure_provider_writes_extract_backend_for_extract_only_web_provider():
+    config = {}
+    provider = {"name": "Extract Only", "web_extract_backend": "crawl4ai", "env_vars": []}
+
+    _configure_provider(provider, config)
+
+    assert config["web"]["extract_backend"] == "crawl4ai"
+    assert "backend" not in config["web"]
+    assert config["web"]["use_gateway"] is False
+
+
 @pytest.mark.parametrize("provider_name,post_setup_key", [
     ("Camofox", "camofox"),
 ])
