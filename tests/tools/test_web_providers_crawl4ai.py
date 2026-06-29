@@ -11,9 +11,10 @@ import httpx
 _REAL_ASYNC_CLIENT = httpx.AsyncClient
 
 
-def _mock_async_client(handler):
+def _mock_async_client(handler, **kwargs):
     transport = httpx.MockTransport(handler)
-    return _REAL_ASYNC_CLIENT(transport=transport, timeout=httpx.Timeout(60.0, connect=10.0))
+    client_kwargs = {"timeout": httpx.Timeout(60.0, connect=10.0), **kwargs}
+    return _REAL_ASYNC_CLIENT(transport=transport, **client_kwargs)
 
 
 class TestCrawl4AIProviderAvailability:
@@ -62,7 +63,7 @@ class TestCrawl4AIProviderExtract:
                 },
             )
 
-        with patch("httpx.AsyncClient", side_effect=lambda **_: _mock_async_client(handler)):
+        with patch("httpx.AsyncClient", side_effect=lambda **kwargs: _mock_async_client(handler, **kwargs)):
             result = asyncio.run(Crawl4AIWebSearchProvider().extract(["https://example.com"]))
 
         assert len(requests) == 1
@@ -86,13 +87,47 @@ class TestCrawl4AIProviderExtract:
             seen_payloads.append(json.loads(request.content.decode()))
             return httpx.Response(200, json={"markdown": "raw", "success": True})
 
-        with patch("httpx.AsyncClient", side_effect=lambda **_: _mock_async_client(handler)):
+        with patch("httpx.AsyncClient", side_effect=lambda **kwargs: _mock_async_client(handler, **kwargs)):
             result = asyncio.run(
                 Crawl4AIWebSearchProvider().extract(["https://example.com"], format="html")
             )
 
         assert seen_payloads[0]["f"] == "raw"
         assert result[0]["content"] == "raw"
+
+    def test_extract_sends_bearer_token_when_configured(self, monkeypatch):
+        monkeypatch.setenv("CRAWL4AI_URL", "http://crawl4ai:11235")
+        monkeypatch.setenv("CRAWL4AI_API_TOKEN", "secret-token")
+        from plugins.web.crawl4ai.provider import Crawl4AIWebSearchProvider
+
+        seen_headers = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen_headers.append(request.headers.get("authorization"))
+            return httpx.Response(200, json={"markdown": "ok", "success": True})
+
+        with patch("httpx.AsyncClient", side_effect=lambda **kwargs: _mock_async_client(handler, **kwargs)):
+            result = asyncio.run(Crawl4AIWebSearchProvider().extract(["https://example.com"]))
+
+        assert seen_headers == ["Bearer secret-token"]
+        assert result[0]["content"] == "ok"
+
+    def test_extract_omits_bearer_token_when_unset(self, monkeypatch):
+        monkeypatch.setenv("CRAWL4AI_URL", "http://crawl4ai:11235")
+        monkeypatch.delenv("CRAWL4AI_API_TOKEN", raising=False)
+        from plugins.web.crawl4ai.provider import Crawl4AIWebSearchProvider
+
+        seen_headers = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen_headers.append(request.headers.get("authorization"))
+            return httpx.Response(200, json={"markdown": "ok", "success": True})
+
+        with patch("httpx.AsyncClient", side_effect=lambda **kwargs: _mock_async_client(handler, **kwargs)):
+            result = asyncio.run(Crawl4AIWebSearchProvider().extract(["https://example.com"]))
+
+        assert seen_headers == [None]
+        assert result[0]["content"] == "ok"
 
     def test_missing_url_returns_per_url_error(self, monkeypatch):
         monkeypatch.delenv("CRAWL4AI_URL", raising=False)
@@ -110,7 +145,7 @@ class TestCrawl4AIProviderExtract:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(503, json={"detail": "not ready"})
 
-        with patch("httpx.AsyncClient", side_effect=lambda **_: _mock_async_client(handler)):
+        with patch("httpx.AsyncClient", side_effect=lambda **kwargs: _mock_async_client(handler, **kwargs)):
             result = asyncio.run(Crawl4AIWebSearchProvider().extract(["https://example.com"]))
 
         assert "HTTP 503" in result[0]["error"]
@@ -123,7 +158,7 @@ class TestCrawl4AIProviderExtract:
         def handler(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("connection refused", request=request)
 
-        with patch("httpx.AsyncClient", side_effect=lambda **_: _mock_async_client(handler)):
+        with patch("httpx.AsyncClient", side_effect=lambda **kwargs: _mock_async_client(handler, **kwargs)):
             result = asyncio.run(Crawl4AIWebSearchProvider().extract(["https://example.com"]))
 
         assert "configured CRAWL4AI_URL" in result[0]["error"]
@@ -137,7 +172,7 @@ class TestCrawl4AIProviderExtract:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text="not-json")
 
-        with patch("httpx.AsyncClient", side_effect=lambda **_: _mock_async_client(handler)):
+        with patch("httpx.AsyncClient", side_effect=lambda **kwargs: _mock_async_client(handler, **kwargs)):
             result = asyncio.run(Crawl4AIWebSearchProvider().extract(["https://example.com"]))
 
         assert "parse" in result[0]["error"].lower()
@@ -182,9 +217,9 @@ class TestCrawl4AIWebExtractDispatch:
 
         try:
             with patch("plugins.web.crawl4ai.provider.check_website_access", return_value=None), \
-                 patch("httpx.AsyncClient", side_effect=lambda **_: _mock_async_client(handler)):
+                 patch("httpx.AsyncClient", side_effect=lambda **kwargs: _mock_async_client(handler, **kwargs)):
                 result = json.loads(asyncio.run(
-                    web_tools.web_extract_tool(["https://example.com"], use_llm_processing=False)
+                    web_tools.web_extract_tool(["https://example.com"])
                 ))
         finally:
             _reset_for_tests()

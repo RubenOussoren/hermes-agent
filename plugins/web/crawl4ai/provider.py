@@ -13,6 +13,7 @@ Config keys this provider responds to::
 Env var::
 
     CRAWL4AI_URL=http://localhost:11235
+    CRAWL4AI_API_TOKEN=<optional bearer token>
 """
 
 from __future__ import annotations
@@ -68,9 +69,14 @@ class Crawl4AIWebSearchProvider(WebSearchProvider):
                 for url in urls
             ]
 
+        headers = {"Accept": "application/json"}
+        api_token = os.getenv("CRAWL4AI_API_TOKEN", "").strip()
+        if api_token:
+            headers["Authorization"] = f"Bearer {api_token}"
+
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(60.0, connect=10.0),
-            headers={"Accept": "application/json"},
+            headers=headers,
         ) as client:
             tasks = [self._extract_one(client, base_url, url, format=format) for url in urls]
             return list(await asyncio.gather(*tasks))
@@ -197,6 +203,12 @@ class Crawl4AIWebSearchProvider(WebSearchProvider):
                     "key": "CRAWL4AI_URL",
                     "prompt": "Crawl4AI server URL (e.g. http://localhost:11235)",
                     "url": "https://github.com/unclecode/crawl4ai",
+                },
+                {
+                    "key": "CRAWL4AI_API_TOKEN",
+                    "prompt": "Crawl4AI bearer token for protected instances",
+                    "url": "https://github.com/unclecode/crawl4ai",
+                    "optional": True,
                 },
             ],
         }

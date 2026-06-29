@@ -20,6 +20,8 @@ from hermes_cli.tools_config import (
     _save_platform_tools,
     _toolset_has_keys,
     _toolset_needs_configuration_prompt,
+    _required_provider_env_vars,
+    _provider_required_env_configured,
     CONFIGURABLE_TOOLSETS,
     TOOL_CATEGORIES,
     gui_toolset_label,
@@ -548,6 +550,77 @@ def test_get_platform_tools_no_mcp_sentinel_does_not_affect_other_platforms():
     # cli (not configured with no_mcp) should include MCP
     cli_enabled = _get_platform_tools(config, "cli")
     assert "exa" in cli_enabled
+
+
+def test_provider_optional_env_vars_do_not_block_configured_state(monkeypatch):
+    provider = {
+        "name": "Example",
+        "env_vars": [
+            {"key": "EXAMPLE_URL"},
+            {"key": "EXAMPLE_API_TOKEN", "optional": True},
+        ],
+    }
+    monkeypatch.setenv("EXAMPLE_URL", "http://localhost:1234")
+    monkeypatch.delenv("EXAMPLE_API_TOKEN", raising=False)
+
+    assert [v["key"] for v in _required_provider_env_vars(provider)] == ["EXAMPLE_URL"]
+    assert _provider_required_env_configured(provider) is True
+
+
+def test_provider_optional_only_env_vars_are_configured_without_value(monkeypatch):
+    provider = {
+        "name": "Example",
+        "env_vars": [{"key": "EXAMPLE_API_TOKEN", "optional": True}],
+    }
+    monkeypatch.delenv("EXAMPLE_API_TOKEN", raising=False)
+
+    assert _required_provider_env_vars(provider) == []
+    assert _provider_required_env_configured(provider) is True
+
+
+def test_crawl4ai_setup_schema_marks_api_token_optional(monkeypatch):
+    monkeypatch.setenv("CRAWL4AI_URL", "http://localhost:11235")
+    monkeypatch.delenv("CRAWL4AI_API_TOKEN", raising=False)
+    from plugins.web.crawl4ai.provider import Crawl4AIWebSearchProvider
+
+    schema = Crawl4AIWebSearchProvider().get_setup_schema()
+    token_var = next(v for v in schema["env_vars"] if v["key"] == "CRAWL4AI_API_TOKEN")
+
+    assert token_var["optional"] is True
+    assert _provider_required_env_configured(schema) is True
+
+
+def test_configure_provider_skipped_optional_env_var_still_configures(monkeypatch):
+    provider = {
+        "name": "Example",
+        "env_vars": [
+            {"key": "EXAMPLE_URL", "prompt": "Example URL"},
+            {"key": "EXAMPLE_API_TOKEN", "prompt": "Example token", "optional": True},
+        ],
+    }
+    saved = {}
+    prompts = []
+
+    monkeypatch.delenv("EXAMPLE_URL", raising=False)
+    monkeypatch.delenv("EXAMPLE_API_TOKEN", raising=False)
+    monkeypatch.setattr("hermes_cli.tools_config.get_env_value", lambda key: saved.get(key))
+    monkeypatch.setattr("hermes_cli.tools_config.save_env_value", lambda key, value: saved.__setitem__(key, value))
+    monkeypatch.setattr("hermes_cli.tools_config._print_success", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_cli.tools_config._print_warning", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_cli.tools_config._print_info", lambda *a, **k: None)
+
+    def fake_prompt(label, default="", password=False):
+        prompts.append(label)
+        if "URL" in label:
+            return "http://localhost:1234"
+        return ""
+
+    monkeypatch.setattr("hermes_cli.tools_config._prompt", fake_prompt)
+
+    _configure_provider(provider, {})
+
+    assert saved == {"EXAMPLE_URL": "http://localhost:1234"}
+    assert any("optional" in prompt for prompt in prompts)
 
 
 def test_toolset_has_keys_for_vision_accepts_codex_auth(tmp_path, monkeypatch):

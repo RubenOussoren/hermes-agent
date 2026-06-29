@@ -2295,10 +2295,10 @@ def _toolset_has_keys(
     cat = TOOL_CATEGORIES.get(ts_key)
     if cat:
         for provider in _visible_providers(cat, config, force_fresh=force_fresh):
-            env_vars = provider.get("env_vars", [])
-            if not env_vars:
+            required_env_vars = _required_provider_env_vars(provider)
+            if not required_env_vars:
                 return True  # No-key provider (e.g. Local Browser, Edge TTS)
-            if all(get_env_value(e["key"]) for e in env_vars):
+            if all(get_env_value(e["key"]) for e in required_env_vars):
                 return True
         return False
 
@@ -2307,6 +2307,22 @@ def _toolset_has_keys(
     if not requirements:
         return True
     return all(get_env_value(var) for var, _ in requirements)
+
+
+def _required_provider_env_vars(provider: dict) -> list[dict]:
+    """Return provider env vars that are required for setup/readiness.
+
+    Provider setup schemas may include optional credentials, such as a bearer
+    token for a self-hosted service that can also run unauthenticated on
+    loopback. Optional entries are still promptable, but should not make the
+    provider appear unconfigured when skipped.
+    """
+    return [var for var in provider.get("env_vars", []) if not var.get("optional")]
+
+
+def _provider_required_env_configured(provider: dict) -> bool:
+    required_env_vars = _required_provider_env_vars(provider)
+    return not required_env_vars or all(get_env_value(v["key"]) for v in required_env_vars)
 
 
 # ─── Menu Helpers ─────────────────────────────────────────────────────────────
@@ -3145,7 +3161,7 @@ def _configure_tool_category(
             tag = f" — {p['tag']}" if p.get("tag") else ""
             configured = ""
             env_vars = p.get("env_vars", [])
-            if not env_vars or all(get_env_value(v["key"]) for v in env_vars):
+            if not env_vars or _provider_required_env_configured(p):
                 if _is_provider_active(p, config, force_fresh=force_fresh):
                     configured = " [active]"
                 elif not env_vars:
@@ -3284,7 +3300,7 @@ def _detect_active_provider_index(
             return i
         # Fallback: env vars present → likely configured
         env_vars = p.get("env_vars", [])
-        if env_vars and all(get_env_value(v["key"]) for v in env_vars):
+        if env_vars and _provider_required_env_configured(p):
             return i
     return 0
 
@@ -3870,6 +3886,7 @@ def _configure_provider(
         _print_info("  Available through Nous Portal subscription.")
 
     for var in env_vars:
+        is_optional = bool(var.get("optional"))
         existing = get_env_value(var["key"])
         if existing:
             _print_success(f"  {var['key']}: already configured")
@@ -3882,16 +3899,23 @@ def _configure_provider(
 
             default_val = var.get("default", "")
             if default_val:
-                value = _prompt(f"    {var.get('prompt', var['key'])}", default_val)
+                label = var.get("prompt", var["key"])
+                if is_optional:
+                    label = f"{label} (optional)"
+                value = _prompt(f"    {label}", default_val)
             else:
-                value = _prompt(f"    {var.get('prompt', var['key'])}", password=True)
+                label = var.get("prompt", var["key"])
+                if is_optional:
+                    label = f"{label} (optional)"
+                value = _prompt(f"    {label}", password=True)
 
             if value:
                 save_env_value(var["key"], value)
                 _print_success("    Saved")
             else:
                 _print_warning("    Skipped")
-                all_configured = False
+                if not is_optional:
+                    all_configured = False
 
     # Run post-setup hooks if needed
     if provider.get("post_setup") and all_configured:
@@ -4218,7 +4242,7 @@ def _configure_tool_category_for_reconfig(
             tag = f" — {p['tag']}" if p.get("tag") else ""
             configured = ""
             env_vars = p.get("env_vars", [])
-            if not env_vars or all(get_env_value(v["key"]) for v in env_vars):
+            if not env_vars or _provider_required_env_configured(p):
                 if _is_provider_active(p, config, force_fresh=force_fresh):
                     configured = " [active]"
                 elif not env_vars:
